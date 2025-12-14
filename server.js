@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import mongoose from 'mongoose';
+import { connectDB } from './db/connection.js';
 import authRoutes from './routes/auth.js';
 import scholarshipRoutes from './routes/scholarships.js';
 import applicationRoutes from './routes/applications.js';
@@ -129,10 +129,7 @@ app.use(express.urlencoded({ extended: true }));
 /* ------------------------------------------
    🟦 MongoDB Connection
 ------------------------------------------- */
-mongoose
-  .connect(process.env.MONGODB_URI)
-  .then(() => console.log('✅ MongoDB Connected'))
-  .catch(err => console.error('❌ MongoDB Connection Error:', err));
+connectDB().catch(err => console.error('❌ MongoDB Connection Error:', err));
 
 /* ------------------------------------------
    🟦 API Routes

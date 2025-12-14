@@ -1,6 +1,7 @@
 import express from 'express';
 import Stripe from 'stripe';
-import Application from '../models/Application.js';
+import { getApplicationsCollection } from '../models/Application.js';
+import { toObjectId, isValidObjectId } from '../db/connection.js';
 
 const router = express.Router();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
@@ -33,11 +34,14 @@ router.post(
         case 'payment_intent.succeeded': {
           const paymentIntent = event.data.object;
           const applicationId = paymentIntent.metadata?.applicationId;
-          if (applicationId) {
-            const application = await Application.findById(applicationId);
+          if (applicationId && isValidObjectId(applicationId)) {
+            const applicationsCollection = getApplicationsCollection();
+            const application = await applicationsCollection.findOne({ _id: toObjectId(applicationId) });
             if (application) {
-              application.paymentStatus = 'paid';
-              await application.save();
+              await applicationsCollection.findOneAndUpdate(
+                { _id: toObjectId(applicationId) },
+                { $set: { paymentStatus: 'paid', updatedAt: new Date() } }
+              );
             }
           }
           break;

@@ -6,8 +6,10 @@ dotenv.config();
 
 import express from 'express';
 import Stripe from 'stripe';
-import Application from '../models/Application.js';
+import { getApplicationsCollection } from '../models/Application.js';
+import { getScholarshipsCollection } from '../models/Scholarship.js';
 import { verifyToken } from '../middleware/verifyToken.js';
+import { toObjectId, isValidObjectId } from '../db/connection.js';
 
 const router = express.Router();
 
@@ -43,17 +45,27 @@ router.post('/create-payment-intent', verifyToken, async (req, res) => {
   try {
     const { applicationId } = req.body;
 
-    const application = await Application.findById(applicationId).populate(
-      'scholarshipId'
-    );
+    if (!isValidObjectId(applicationId)) {
+      return res.status(400).json({ message: 'Invalid application ID' });
+    }
+
+    const applicationsCollection = getApplicationsCollection();
+    const application = await applicationsCollection.findOne({ _id: toObjectId(applicationId) });
 
     if (!application)
       return res.status(404).json({ message: 'Application not found' });
 
     // Verify user ownership
-    if (application.userId.toString() !== req.user._id.toString()) {
+    const userIdStr = application.userId?.toString();
+    if (userIdStr !== req.user._id.toString()) {
       return res.status(403).json({ message: 'Access denied' });
     }
+
+    // Get scholarship data
+    const scholarshipsCollection = getScholarshipsCollection();
+    const scholarship = application.scholarshipId
+      ? await scholarshipsCollection.findOne({ _id: toObjectId(application.scholarshipId) })
+      : null;
 
     const totalAmount =
       (application.applicationFees + application.serviceCharge) * 100;
@@ -93,6 +105,10 @@ router.post('/success', verifyToken, async (req, res) => {
     if (!paymentIntentId)
       return res.status(400).json({ message: 'paymentIntentId is required' });
 
+    if (!isValidObjectId(applicationId)) {
+      return res.status(400).json({ message: 'Invalid application ID' });
+    }
+
     const intent = await stripe.paymentIntents.retrieve(paymentIntentId);
 
     if (!intent)
@@ -113,17 +129,23 @@ router.post('/success', verifyToken, async (req, res) => {
         .json({ message: 'Payment does not match the application' });
     }
 
-    const application = await Application.findById(applicationId);
+    const applicationsCollection = getApplicationsCollection();
+    const application = await applicationsCollection.findOne({ _id: toObjectId(applicationId) });
+    
     if (!application)
       return res.status(404).json({ message: 'Application not found' });
 
-    if (application.userId.toString() !== req.user._id.toString())
+    const userIdStr = application.userId?.toString();
+    if (userIdStr !== req.user._id.toString())
       return res.status(403).json({ message: 'Access denied' });
 
-    application.paymentStatus = 'paid';
-    await application.save();
+    const result = await applicationsCollection.findOneAndUpdate(
+      { _id: toObjectId(applicationId) },
+      { $set: { paymentStatus: 'paid', updatedAt: new Date() } },
+      { returnDocument: 'after' }
+    );
 
-    return res.json({ message: 'Payment successful', application });
+    return res.json({ message: 'Payment successful', application: result.value });
   } catch (error) {
     return res.status(500).json({
       message: 'Error processing payment',
@@ -141,15 +163,25 @@ router.post('/create-checkout-session', verifyToken, async (req, res) => {
   try {
     const { applicationId } = req.body;
 
-    const application = await Application.findById(applicationId).populate(
-      'scholarshipId'
-    );
+    if (!isValidObjectId(applicationId)) {
+      return res.status(400).json({ message: 'Invalid application ID' });
+    }
+
+    const applicationsCollection = getApplicationsCollection();
+    const application = await applicationsCollection.findOne({ _id: toObjectId(applicationId) });
 
     if (!application)
       return res.status(404).json({ message: 'Application not found' });
 
-    if (application.userId.toString() !== req.user._id.toString())
+    const userIdStr = application.userId?.toString();
+    if (userIdStr !== req.user._id.toString())
       return res.status(403).json({ message: 'Access denied' });
+
+    // Get scholarship data
+    const scholarshipsCollection = getScholarshipsCollection();
+    const scholarship = application.scholarshipId
+      ? await scholarshipsCollection.findOne({ _id: toObjectId(application.scholarshipId) })
+      : null;
 
     const totalAmountCents = Math.round(
       (application.applicationFees + application.serviceCharge) * 100
@@ -173,7 +205,7 @@ router.post('/create-checkout-session', verifyToken, async (req, res) => {
             currency: 'usd',
             product_data: {
               name:
-                application.scholarshipId?.scholarshipName ||
+                scholarship?.scholarshipName ||
                 'Scholarship Application Fee',
             },
             unit_amount: totalAmountCents,
@@ -225,25 +257,35 @@ router.get('/verify', verifyToken, async (req, res) => {
         .status(400)
         .json({ message: 'No applicationId in session metadata' });
 
+    if (!isValidObjectId(applicationId)) {
+      return res.status(400).json({ message: 'Invalid application ID' });
+    }
+
     const paymentIntent = session.payment_intent;
 
     if (!paymentIntent || paymentIntent.status !== 'succeeded')
       return res.status(400).json({ message: 'Payment incomplete', session });
 
-    const application = await Application.findById(applicationId);
+    const applicationsCollection = getApplicationsCollection();
+    const application = await applicationsCollection.findOne({ _id: toObjectId(applicationId) });
+    
     if (!application)
       return res.status(404).json({ message: 'Application not found' });
 
-    if (application.userId.toString() !== req.user._id.toString())
+    const userIdStr = application.userId?.toString();
+    if (userIdStr !== req.user._id.toString())
       return res.status(403).json({ message: 'Access denied' });
 
-    application.paymentStatus = 'paid';
-    await application.save();
+    const result = await applicationsCollection.findOneAndUpdate(
+      { _id: toObjectId(applicationId) },
+      { $set: { paymentStatus: 'paid', updatedAt: new Date() } },
+      { returnDocument: 'after' }
+    );
 
     return res.json({
       success: true,
       message: 'Payment verified',
-      application,
+      application: result.value,
     });
   } catch (error) {
     return res.status(500).json({

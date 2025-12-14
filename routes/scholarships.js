@@ -1,7 +1,8 @@
 import express from 'express';
-import Scholarship from '../models/Scholarship.js';
+import { getScholarshipsCollection } from '../models/Scholarship.js';
 import { verifyToken } from '../middleware/verifyToken.js';
 import { verifyAdmin } from '../middleware/verifyAdmin.js';
+import { toObjectId, isValidObjectId } from '../db/connection.js';
 
 const router = express.Router();
 
@@ -54,12 +55,15 @@ router.get('/', async (req, res) => {
     // Pagination
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    const scholarships = await Scholarship.find(query)
+    const scholarshipsCollection = getScholarshipsCollection();
+    const scholarships = await scholarshipsCollection
+      .find(query)
       .sort(sort)
       .skip(skip)
-      .limit(parseInt(limit));
+      .limit(parseInt(limit))
+      .toArray();
 
-    const total = await Scholarship.countDocuments(query);
+    const total = await scholarshipsCollection.countDocuments(query);
 
     res.json({
       scholarships,
@@ -75,9 +79,12 @@ router.get('/', async (req, res) => {
 // Get Top 6 Scholarships (lowest fees or recent)
 router.get('/top', async (req, res) => {
   try {
-    const scholarships = await Scholarship.find()
+    const scholarshipsCollection = getScholarshipsCollection();
+    const scholarships = await scholarshipsCollection
+      .find()
       .sort({ applicationFees: 1, scholarshipPostDate: -1 })
-      .limit(6);
+      .limit(6)
+      .toArray();
 
     res.json(scholarships);
   } catch (error) {
@@ -88,7 +95,13 @@ router.get('/top', async (req, res) => {
 // Get Single Scholarship
 router.get('/:id', async (req, res) => {
   try {
-    const scholarship = await Scholarship.findById(req.params.id);
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({ message: 'Invalid scholarship ID' });
+    }
+
+    const scholarshipsCollection = getScholarshipsCollection();
+    const scholarship = await scholarshipsCollection.findOne({ _id: toObjectId(req.params.id) });
+    
     if (!scholarship) {
       return res.status(404).json({ message: 'Scholarship not found' });
     }
@@ -101,12 +114,18 @@ router.get('/:id', async (req, res) => {
 // Create Scholarship (Admin only)
 router.post('/', verifyAdmin, async (req, res) => {
   try {
-    const scholarship = new Scholarship({
+    const scholarship = {
       ...req.body,
-      postedUserEmail: req.user.email
-    });
-    await scholarship.save();
-    res.status(201).json({ message: 'Scholarship created successfully', scholarship });
+      postedUserEmail: req.user.email,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    const scholarshipsCollection = getScholarshipsCollection();
+    const result = await scholarshipsCollection.insertOne(scholarship);
+    const insertedScholarship = await scholarshipsCollection.findOne({ _id: result.insertedId });
+
+    res.status(201).json({ message: 'Scholarship created successfully', scholarship: insertedScholarship });
   } catch (error) {
     res.status(500).json({ message: 'Error creating scholarship', error: error.message });
   }
@@ -115,15 +134,26 @@ router.post('/', verifyAdmin, async (req, res) => {
 // Update Scholarship (Admin only)
 router.put('/:id', verifyAdmin, async (req, res) => {
   try {
-    const scholarship = await Scholarship.findByIdAndUpdate(
-      req.params.id,
-      req.body,
-      { new: true, runValidators: true }
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({ message: 'Invalid scholarship ID' });
+    }
+
+    const scholarshipsCollection = getScholarshipsCollection();
+    const updateData = {
+      ...req.body,
+      updatedAt: new Date(),
+    };
+
+    const result = await scholarshipsCollection.findOneAndUpdate(
+      { _id: toObjectId(req.params.id) },
+      { $set: updateData },
+      { returnDocument: 'after' }
     );
-    if (!scholarship) {
+
+    if (!result.value) {
       return res.status(404).json({ message: 'Scholarship not found' });
     }
-    res.json({ message: 'Scholarship updated successfully', scholarship });
+    res.json({ message: 'Scholarship updated successfully', scholarship: result.value });
   } catch (error) {
     res.status(500).json({ message: 'Error updating scholarship', error: error.message });
   }
@@ -132,8 +162,14 @@ router.put('/:id', verifyAdmin, async (req, res) => {
 // Delete Scholarship (Admin only)
 router.delete('/:id', verifyAdmin, async (req, res) => {
   try {
-    const scholarship = await Scholarship.findByIdAndDelete(req.params.id);
-    if (!scholarship) {
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({ message: 'Invalid scholarship ID' });
+    }
+
+    const scholarshipsCollection = getScholarshipsCollection();
+    const result = await scholarshipsCollection.findOneAndDelete({ _id: toObjectId(req.params.id) });
+
+    if (!result.value) {
       return res.status(404).json({ message: 'Scholarship not found' });
     }
     res.json({ message: 'Scholarship deleted successfully' });
@@ -143,4 +179,3 @@ router.delete('/:id', verifyAdmin, async (req, res) => {
 });
 
 export default router;
-

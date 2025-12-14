@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken';
-import User from '../models/User.js';
+import { getUsersCollection } from '../models/User.js';
+import { toObjectId, isValidObjectId } from '../db/connection.js';
 
 export const verifyToken = async (req, res, next) => {
   try {
@@ -10,7 +11,13 @@ export const verifyToken = async (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findById(decoded.userId);
+    
+    if (!isValidObjectId(decoded.userId)) {
+      return res.status(401).json({ message: 'Invalid user ID' });
+    }
+
+    const usersCollection = getUsersCollection();
+    const user = await usersCollection.findOne({ _id: toObjectId(decoded.userId) });
 
     if (!user) {
       return res.status(401).json({ message: 'User not found' });

@@ -1,6 +1,6 @@
 import express from 'express';
-import Application from '../models/Application.js';
-import User from '../models/User.js';
+import { getApplicationsCollection } from '../models/Application.js';
+import { getUsersCollection } from '../models/User.js';
 import { verifyAdmin } from '../middleware/verifyAdmin.js';
 
 const router = express.Router();
@@ -8,21 +8,24 @@ const router = express.Router();
 // Get Analytics (Admin only)
 router.get('/', verifyAdmin, async (req, res) => {
   try {
+    const usersCollection = getUsersCollection();
+    const applicationsCollection = getApplicationsCollection();
+
     // Total Users
-    const totalUsers = await User.countDocuments();
+    const totalUsers = await usersCollection.countDocuments();
 
     // Users by Role
-    const usersByRole = await User.aggregate([
+    const usersByRole = await usersCollection.aggregate([
       {
         $group: {
           _id: '$role',
           count: { $sum: 1 }
         }
       }
-    ]);
+    ]).toArray();
 
     // Applications by University
-    const applicationsByUniversity = await Application.aggregate([
+    const applicationsByUniversity = await applicationsCollection.aggregate([
       {
         $group: {
           _id: '$universityName',
@@ -31,20 +34,20 @@ router.get('/', verifyAdmin, async (req, res) => {
       },
       { $sort: { count: -1 } },
       { $limit: 10 }
-    ]);
+    ]).toArray();
 
     // Applications by Status
-    const applicationsByStatus = await Application.aggregate([
+    const applicationsByStatus = await applicationsCollection.aggregate([
       {
         $group: {
           _id: '$applicationStatus',
           count: { $sum: 1 }
         }
       }
-    ]);
+    ]).toArray();
 
     // Total Fees Collected
-    const totalFees = await Application.aggregate([
+    const totalFees = await applicationsCollection.aggregate([
       {
         $match: { paymentStatus: 'paid' }
       },
@@ -55,7 +58,7 @@ router.get('/', verifyAdmin, async (req, res) => {
           totalServiceCharge: { $sum: '$serviceCharge' }
         }
       }
-    ]);
+    ]).toArray();
 
     const feesData = totalFees[0] || { totalApplicationFees: 0, totalServiceCharge: 0 };
 
@@ -74,4 +77,3 @@ router.get('/', verifyAdmin, async (req, res) => {
 });
 
 export default router;
-

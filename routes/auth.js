@@ -1,14 +1,14 @@
 import express from 'express';
-import User from '../models/User.js'; // User model
-import bcrypt from 'bcryptjs'; // For password hashing
-import jwt from 'jsonwebtoken'; // For generating JWT
+import { getUsersCollection } from '../models/User.js';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 import admin from 'firebase-admin';
 import { verifyToken } from '../middleware/verifyToken.js';
+import { toObjectId, isValidObjectId } from '../db/connection.js';
 
 const router = express.Router();
 
 // POST /auth/register (User Registration)
-// Supports both Firebase idToken-based registration and direct email/password registration
 router.post('/register', async (req, res) => {
   const { idToken, name, email, password, photoURL, role } = req.body;
 
@@ -25,9 +25,6 @@ router.post('/register', async (req, res) => {
         verifiedEmail = decodedToken.email || email;
         verifiedName = decodedToken.name || name || verifiedEmail.split('@')[0];
         verifiedPhotoURL = decodedToken.picture || photoURL || '';
-        
-        // For Firebase-based registration, we don't need to store password
-        // as Firebase handles authentication
       } catch (firebaseError) {
         return res.status(401).json({ 
           message: 'Invalid Firebase token', 
@@ -35,7 +32,6 @@ router.post('/register', async (req, res) => {
         });
       }
     } else if (email && password) {
-      // Direct email/password registration (without Firebase)
       verifiedEmail = email;
       verifiedName = name || email.split('@')[0];
       verifiedPhotoURL = photoURL || '';
@@ -46,8 +42,10 @@ router.post('/register', async (req, res) => {
       });
     }
 
+    const usersCollection = getUsersCollection();
+
     // Check if user already exists
-    const existingUser = await User.findOne({ email: verifiedEmail });
+    const existingUser = await usersCollection.findOne({ email: verifiedEmail });
     if (existingUser) {
       return res.status(400).json({ message: 'User already exists' });
     }
@@ -59,9 +57,7 @@ router.post('/register', async (req, res) => {
 
     // Prevent public assignment of Admin role except when DB has no Admin yet
     if (assignedRole === 'Admin') {
-      // If there are no Admin users in the DB, allow creating the first Admin.
-      // This enables initial bootstrapping. Otherwise require an Admin token.
-      const adminCount = await User.countDocuments({ role: 'Admin' });
+      const adminCount = await usersCollection.countDocuments({ role: 'Admin' });
       if (adminCount === 0) {
         // allow creating the first Admin without an existing admin token
       } else {
@@ -74,7 +70,10 @@ router.post('/register', async (req, res) => {
         }
         try {
           const decoded = jwt.verify(token, process.env.JWT_SECRET);
-          const requestingUser = await User.findById(decoded.userId);
+          if (!isValidObjectId(decoded.userId)) {
+            return res.status(403).json({ message: 'Invalid authorization token' });
+          }
+          const requestingUser = await usersCollection.findOne({ _id: toObjectId(decoded.userId) });
           if (!requestingUser || requestingUser.role !== 'Admin') {
             return res
               .status(403)
@@ -89,20 +88,22 @@ router.post('/register', async (req, res) => {
     }
 
     // Create new user
-    const newUser = new User({
+    const newUser = {
       name: verifiedName,
       email: verifiedEmail,
-      password: hashedPassword, // null for Firebase-based users
+      password: hashedPassword,
       photoURL: verifiedPhotoURL,
       role: assignedRole,
-    });
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
 
-    // Save user to database
-    await newUser.save();
+    const result = await usersCollection.insertOne(newUser);
+    const insertedUser = await usersCollection.findOne({ _id: result.insertedId });
 
     // Generate JWT
     const token = jwt.sign(
-      { userId: newUser._id, email: newUser.email },
+      { userId: insertedUser._id.toString(), email: insertedUser.email },
       process.env.JWT_SECRET,
       { expiresIn: '7d' }
     );
@@ -111,11 +112,11 @@ router.post('/register', async (req, res) => {
       message: 'User registered successfully',
       token,
       user: {
-        _id: newUser._id,
-        name: newUser.name,
-        email: newUser.email,
-        photoURL: newUser.photoURL,
-        role: newUser.role,
+        _id: insertedUser._id,
+        name: insertedUser.name,
+        email: insertedUser.email,
+        photoURL: insertedUser.photoURL,
+        role: insertedUser.role,
       },
     });
   } catch (error) {
@@ -124,49 +125,48 @@ router.post('/register', async (req, res) => {
     if (error.code === 11000) {
       return res.status(409).json({ message: 'Email already registered' });
     }
-    // Mongoose validation error
-    if (error.name === 'ValidationError') {
-      return res
-        .status(400)
-        .json({ message: 'Invalid user data', error: error.message });
-    }
     res
       .status(500)
       .json({ message: 'Registration failed', error: error.message });
   }
 });
 
-export default router;
-
 // POST /auth/login (Firebase ID token based login)
 router.post('/login', async (req, res) => {
   try {
     const { idToken, email, password } = req.body;
+    const usersCollection = getUsersCollection();
 
     // 1) Firebase ID token based login (existing flow)
     if (idToken) {
       const decodedToken = await admin.auth().verifyIdToken(idToken);
       const { email: fbEmail, name, picture } = decodedToken;
 
-      let user = await User.findOne({ email: fbEmail });
+      let user = await usersCollection.findOne({ email: fbEmail });
       if (!user) {
-        user = new User({
+        const newUser = {
           name: name || fbEmail.split('@')[0],
           email: fbEmail,
           photoURL: picture || '',
           role: 'Student',
-        });
-        await user.save();
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        const result = await usersCollection.insertOne(newUser);
+        user = await usersCollection.findOne({ _id: result.insertedId });
       } else {
         // update photoURL if changed
         if (picture && picture !== user.photoURL) {
+          await usersCollection.updateOne(
+            { _id: user._id },
+            { $set: { photoURL: picture, updatedAt: new Date() } }
+          );
           user.photoURL = picture;
-          await user.save();
         }
       }
 
       const token = jwt.sign(
-        { userId: user._id, email: user.email },
+        { userId: user._id.toString(), email: user.email },
         process.env.JWT_SECRET,
         { expiresIn: '7d' }
       );
@@ -186,7 +186,7 @@ router.post('/login', async (req, res) => {
 
     // 2) Email + Password based login (new flow)
     if (email && password) {
-      const user = await User.findOne({ email });
+      const user = await usersCollection.findOne({ email });
       if (!user || !user.password) {
         return res.status(401).json({ message: 'Invalid credentials' });
       }
@@ -197,7 +197,7 @@ router.post('/login', async (req, res) => {
       }
 
       const token = jwt.sign(
-        { userId: user._id, email: user.email },
+        { userId: user._id.toString(), email: user.email },
         process.env.JWT_SECRET,
         { expiresIn: '7d' }
       );
@@ -243,3 +243,5 @@ router.get('/me', verifyToken, async (req, res) => {
       .json({ message: 'Error fetching user', error: error.message });
   }
 });
+
+export default router;

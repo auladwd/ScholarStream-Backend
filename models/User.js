@@ -1,36 +1,8 @@
-import mongoose from 'mongoose';
+import { getDB } from '../db/connection.js';
 
-const userSchema = new mongoose.Schema(
-  {
-    name: {
-      type: String,
-      required: true,
-      trim: true,
-    },
-    email: {
-      type: String,
-      required: true,
-      unique: true,
-      lowercase: true,
-      trim: true,
-    },
-    password: {
-      type: String,
-      default: '',
-    },
-    photoURL: {
-      type: String,
-      default: '',
-    },
-    role: {
-      type: String,
-      enum: ['Student', 'Moderator', 'Admin'],
-      default: 'Student',
-    },
-  },
-  {
-    timestamps: true,
-  }
-);
+export const getUsersCollection = () => {
+  return getDB().collection('users');
+};
 
-export default mongoose.model('User', userSchema);
+// Collection name
+export const COLLECTION_NAME = 'users';
